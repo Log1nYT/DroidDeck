@@ -339,7 +339,17 @@ class SessionService : Service() {
         val sessionDir = openSessionFolder()
         val sessionLog = File(sessionDir, "session.log")
 
-        Log.i(TAG, GpuClockPin.start(this))
+        // Eco-stable: clamp the fps cap by profile + live thermal level before anything
+        // else reads it, then start the GPU pin (eco-gated) and the thermal sampler.
+        val profileAtStart = PowerProfile.get(this)
+        val thermalAtStart = ThermalMonitor.currentLevel(this)
+        SessionState.fpsLimit = ThermalMonitor.throttleFps(
+            PowerProfile.effectiveFpsLimit(SessionState.fpsLimit, profileAtStart),
+            thermalAtStart,
+        )
+        Log.i(TAG, "eco: profile $profileAtStart thermal $thermalAtStart fps ${SessionState.fpsLimit}")
+        Log.i(TAG, GpuClockPin.startEco(this))
+        ThermalMonitor.start(this)
 
         val size = SessionState.outputSize
         val guest = ArrayList<String>()
@@ -643,7 +653,9 @@ class SessionService : Service() {
         // every thread start paid a SIGSYS that proot answers; the malloc top pad grows the heap
         // 16 MB at a time instead of 128 KB, and every brk(2) is a proot stop too.
         guest.add("GLIBC_TUNABLES=glibc.pthread.rseq=0:glibc.malloc.top_pad=16777216")
-        if (SessionState.mode == MODE_STEAM) guest.add("BL_MANGOAPP=" + (if (SessionPrefs.mangoapp(this)) "1" else "0"))
+        // Eco-stable: mango/realtime/present hints follow the power profile, never the raw toggles.
+        val ecoProfile = PowerProfile.get(this)
+        if (SessionState.mode == MODE_STEAM) guest.add("BL_MANGOAPP=" + (if (PowerProfile.effectiveMangoapp(SessionPrefs.mangoapp(this), ecoProfile)) "1" else "0"))
         if (SessionState.mode == MODE_STEAM) {
             guest.add("BL_GAMESCOPE_STRETCH_16X9=" + (if (SessionPrefs.stretch16x9(this)) "1" else "0"))
         }
@@ -655,8 +667,11 @@ class SessionService : Service() {
         guest.add("BL_SYNC_FALLBACK=" + (if (SessionPrefs.syncFallback(this)) "1" else "0"))
         guest.add("BL_FSYNC_FIRST=" + (if (SessionPrefs.fsyncFirst(this)) "1" else "0"))
         // gamescope's realtime Vulkan queues (the session script turns this into
-        // GAMESCOPE_FORCE_VULKAN_REALTIME); off unless the user turns it on.
-        guest.add("BL_GAMESCOPE_REALTIME=" + (if (SessionPrefs.gamescopeRealtime(this)) "1" else "0"))
+        // GAMESCOPE_FORCE_VULKAN_REALTIME); eco-stable: PERFORMANCE only, otherwise forced off
+        // even if the user toggled it on (it preempts the game for the compositor).
+        guest.add("BL_GAMESCOPE_REALTIME=" + (if (SessionPrefs.gamescopeRealtime(this) && PowerProfile.allowRealtime(ecoProfile)) "1" else "0"))
+        // Eco-stable guest hints (vsync present, async DXVK, no HVV upload). No-ops on PERFORMANCE.
+        PowerProfile.ecoEnv(ecoProfile).forEach { guest.add(it) }
         guest.add("BANNER_AUDIO_DIRECT_DECAY=0")
         // Anything else, for a device that cannot be reached with a debugger: droiddeck-env in the
         // app's own external files (envSwitchFile) holds KEY=VALUE lines that go into the session's
@@ -1544,6 +1559,7 @@ class SessionService : Service() {
         SessionState.stopRequested = false
         SessionEvents.record("guest.exited", mapOf("status" to status))
         GpuClockPin.stop(this)
+        ThermalMonitor.stop()
         SessionEvents.transition(SessionPhase.STOPPING, "session.stopping", mapOf("status" to status))
         suspendOperationPending = false
         launchWatcher?.stopWatching()
@@ -1644,8 +1660,9 @@ class SessionService : Service() {
         }
         try {
             val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-            val allowed = DeviceSupport.lowLatencyWifiSafe()
-            if (!allowed) Log.i(TAG, "wifi lock skipped: its low-latency mode resets this device")
+            val allowed = DeviceSupport.lowLatencyWifiSafe() && PowerProfile.allowWifiHighPerf(PowerProfile.get(this))
+            if (!DeviceSupport.lowLatencyWifiSafe()) Log.i(TAG, "wifi lock skipped: its low-latency mode resets this device")
+            else if (!PowerProfile.allowWifiHighPerf(PowerProfile.get(this))) Log.i(TAG, "wifi lock skipped: eco profile keeps radio in power-save")
             @Suppress("DEPRECATION") // deprecated from API 29, still honoured; targetSdk is 28
             if (allowed && wifiLock?.isHeld != true) {
                 wifiLock = wifi?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "DroidDeck:session-wifi")

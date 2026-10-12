@@ -26,7 +26,31 @@ object GpuClockPin {
     @Volatile
     private var pinned = false
 
+    /** Read by ThermalMonitor; true while the top clock is held. */
+    @JvmStatic
+    val isPinned: Boolean get() = pinned
+
     private val supported: Boolean by lazy { File(KGSL_NODE).exists() }
+
+    /**
+     * Eco-aware start: the user's pin is honoured only in PERFORMANCE, and never
+     * when the device is already HOT+ at session start. Otherwise governed.
+     */
+    @Synchronized
+    fun startEco(context: Context): String {
+        val profile = PowerProfile.get(context)
+        if (!PowerProfile.allowGpuPin(profile)) return "gpu clock: governed ($profile)"
+        if (ThermalMonitor.shouldUnpinGpu(ThermalMonitor.currentLevel(context))) {
+            return "gpu clock: governed (thermal, pin skipped)"
+        }
+        return start(context)
+    }
+
+    /** Called by ThermalMonitor when the device trips HOT+ mid-session. Never re-pins. */
+    @Synchronized
+    fun unpinForThermal(context: Context) {
+        if (pinned) clear(context)
+    }
 
     /** At a session's start: pins the clock when the user asked for it. The line is for the log. */
     @Synchronized
