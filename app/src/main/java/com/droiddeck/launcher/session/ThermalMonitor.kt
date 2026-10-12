@@ -91,7 +91,7 @@ object ThermalMonitor {
         thread = Thread({
             var lastLevel = COOL
             while (running) {
-                try { Thread.sleep(10_000L) } catch (_: InterruptedException) { break }
+                try { Thread.sleep(30_000L) } catch (_: InterruptedException) { break }
                 if (!running) break
                 val level = currentLevel(appCtx)
                 if (level != lastLevel) {

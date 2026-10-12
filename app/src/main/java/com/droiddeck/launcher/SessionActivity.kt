@@ -196,6 +196,12 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var powerProfile by mutableStateOf(com.droiddeck.launcher.session.PowerProfile.BALANCED)
     private var brightnessPct by mutableIntStateOf(100)
     private var inAppVolumeKeys by mutableStateOf(true)
+    // Eco-stable idle dim: FLAG_KEEP_SCREEN_ON defeats the system timeout, so an AFK
+    // session burns max brightness unbounded. After IDLE_DIM_MS with no input the
+    // window dims transiently (never persisted); any input restores it.
+    private var brightnessBeforeDim = 100
+    private var dimmedForIdle = false
+    private val idleDim = Runnable { dimForIdle() }
     /** When the pad or the on-screen controls were last used (uptimeMillis); see [showCursor]. */
     private var lastPadInputMs = 0L
     // The program's own pointer, from wl_pointer.set_cursor (see syncClientCursor): its image in
@@ -449,6 +455,7 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
             lastPadInputMs = android.os.SystemClock.uptimeMillis()
             uiHandler.removeCallbacks(cursorHide)
             cursorVisible = false
+            pokeIdleDim()
         }
         onScreenControls = OnScreenControls(this, bridge, onKeyboard = ::togglePcKeyboard).also { root.addView(it) }
         keyboard = KeyboardHost(this).also { root.addView(it) }
@@ -1074,6 +1081,8 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
         oscMode = SessionPrefs.oscMode(this)
         backActionsInverted = SessionPrefs.backActionsInverted(this)
         padType = SessionPrefs.steamController(this)
+        // Eco-stable: re-arm the idle dim on every prefs read (startup, resume, setting change).
+        pokeIdleDim()
         // Eco-stable power page: profile, per-session brightness, volume snapshot.
         powerProfile = com.droiddeck.launcher.session.PowerProfile.get(this)
         inAppVolumeKeys = SessionPrefs.inAppVolume(this)
@@ -1104,6 +1113,25 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
         try {
             window.attributes = window.attributes.apply { screenBrightness = brightnessPct / 100f }
         } catch (_: Throwable) { }
+    }
+
+    /** Eco-stable idle dim: any input restores the saved level and re-arms the timer. */
+    private fun pokeIdleDim() {
+        uiHandler.removeCallbacks(idleDim)
+        if (dimmedForIdle) {
+            dimmedForIdle = false
+            applyBrightness(brightnessBeforeDim, save = false)
+        }
+        if (!pipUi && !SessionState.suspended) uiHandler.postDelayed(idleDim, IDLE_DIM_MS)
+    }
+
+    private fun dimForIdle() {
+        if (pipUi || SessionState.suspended) return
+        if (runCatching { com.droiddeck.launcher.wayland.WaylandCompositor.nativeHdrOnScreen() }.getOrDefault(false)) return
+        brightnessBeforeDim = brightnessPct
+        dimmedForIdle = true
+        applyBrightness(maxOf(30, brightnessPct / 2), save = false)
+        Log.i(TAG, "eco: idle dim to $brightnessPct%")
     }
 
     /** Eco-stable: drawer volume slider, same silent path as the hardware keys. */
@@ -1668,6 +1696,7 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) pokeIdleDim()
         // The device's own volume keys belong to Android: forwarded to the guest as keys they
         // changed nothing anyone could hear (a Pocket FIT report, on the desktop).
         when (event.keyCode) {
@@ -1795,6 +1824,7 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (pipUi) return true
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) pokeIdleDim()
         if (event.actionMasked == MotionEvent.ACTION_DOWN && event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)) {
             drawerControllerActive = false
         }
@@ -2515,6 +2545,7 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     override fun onPause() {
         if (runtimeRemovalBlocked) { super.onPause(); return }
+        uiHandler.removeCallbacks(idleDim)
         sessionClipboard.stop()
         // Do not carry transient session UI across an app/display transition. In particular, the
         // drawer's dim layer can otherwise remain over Steam when this activity returns.
@@ -2662,6 +2693,8 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
         const val EXTRA_RETURN_HOME = "returnHome"
         /** How long the leaving flood may take before the session closes without it. */
         private const val LEAVE_TIMEOUT_MS = 1_500L
+        /** Eco-stable: no input this long dims the window until the next input. */
+        private const val IDLE_DIM_MS = 90_000L
         private const val TAG = "SessionActivity"
         private const val FEX_MISSING = "droiddeck-fex: x86 Linux programs need"
         private const val UNBUFFERED_SOURCES = InputDevice.SOURCE_CLASS_JOYSTICK or InputDevice.SOURCE_CLASS_TRACKBALL or InputDevice.SOURCE_CLASS_POSITION

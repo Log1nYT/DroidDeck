@@ -15,7 +15,7 @@ import java.io.File
  */
 object SessionInstalls {
     private const val TAG = "SessionInstalls"
-    private const val POLL_MS = 5_000L
+    private const val POLL_MS = 15_000L
 
     /** One appmanifest as read: the app, its name and folder, whether it is fully installed. */
     class Manifest(val appId: Int, val name: String, val installDir: String, val installed: Boolean, val steamapps: File)

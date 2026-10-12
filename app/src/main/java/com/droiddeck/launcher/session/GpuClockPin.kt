@@ -68,6 +68,24 @@ object GpuClockPin {
         return if (pinned) "gpu clock: pinned" else start(context)
     }
 
+    /**
+     * Freeze drops the pin (a SIGSTOP'd session must not hold the top clock); resume
+     * re-evaluates the profile, staying governed on a hot device.
+     */
+    @Synchronized
+    fun setSuspended(context: Context, suspended: Boolean): String {
+        if (suspended) {
+            return if (pinned) {
+                clear(context)
+                "gpu clock: unpinned (suspend)"
+            } else "gpu clock: governed"
+        }
+        if (ThermalMonitor.shouldUnpinGpu(ThermalMonitor.currentLevel(context))) {
+            return "gpu clock: governed (thermal)"
+        }
+        return applyProfile(context)
+    }
+
     /** At a session's start: pins the clock when the user asked for it. The line is for the log. */
     @Synchronized
     fun start(context: Context): String {

@@ -1382,6 +1382,7 @@ class SessionService : Service() {
                     if (success) {
                         SessionState.suspended = true
                         SessionEvents.transition(SessionPhase.SUSPENDED, "session.suspended")
+                        Log.i(TAG, GpuClockPin.setSuspended(this, true))
                         releaseLocks()
                         refreshNotification()
                     } else {
@@ -1402,6 +1403,7 @@ class SessionService : Service() {
                     if (success) {
                         SessionState.suspended = false
                         SessionEvents.transition(SessionEvents.resumePhase(), "session.resumed")
+                        Log.i(TAG, GpuClockPin.setSuspended(this, false))
                         refreshNotification()
                     } else {
                         suspendAttemptFailed = true
@@ -1659,23 +1661,45 @@ class SessionService : Service() {
             Log.w(TAG, "no wake lock (${t.message}) - the session may be killed in the background")
         }
         try {
-            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-            val allowed = DeviceSupport.lowLatencyWifiSafe() && PowerProfile.allowWifiHighPerf(PowerProfile.get(this))
-            if (!DeviceSupport.lowLatencyWifiSafe()) Log.i(TAG, "wifi lock skipped: its low-latency mode resets this device")
-            else if (!PowerProfile.allowWifiHighPerf(PowerProfile.get(this))) Log.i(TAG, "wifi lock skipped: eco profile keeps radio in power-save")
-            @Suppress("DEPRECATION") // deprecated from API 29, still honoured; targetSdk is 28
-            if (allowed && wifiLock?.isHeld != true) {
-                wifiLock = wifi?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "DroidDeck:session-wifi")
-                    ?.apply {
-                        setReferenceCounted(false)
-                        acquire()
-                    }
-            }
+            updateWifiLock()
             Log.i(TAG, "wifi lock held=${wifiLock?.isHeld}")
         } catch (t: Throwable) {
             // A partial wake lock keeps the process alive but does not stop WiFi power-save from
             // throttling a backgrounded download to nothing, which is what this lock is for.
             Log.w(TAG, "no wifi lock (${t.message}) - a backgrounded download may stall")
+        }
+    }
+
+    /** Eco-stable: HIGH_PERF only while a download holds the radio busy; plain FULL otherwise. */
+    private var wifiHighPerf = false
+
+    @Suppress("DEPRECATION") // deprecated from API 29, still honoured; targetSdk is 28
+    private fun updateWifiLock() {
+        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        if (!DeviceSupport.lowLatencyWifiSafe()) {
+            Log.i(TAG, "wifi lock skipped: its low-latency mode resets this device")
+            return
+        }
+        if (!PowerProfile.allowWifiHighPerf(PowerProfile.get(this))) {
+            Log.i(TAG, "wifi lock skipped: eco profile keeps radio in power-save")
+            return
+        }
+        // Full throughput only for an active download; idle/menu keeps the connection
+        // without defeating the radio's power-save (~0.5-1 W on the air).
+        val wantHighPerf = downloadActive
+        if (wifiLock?.isHeld == true && wifiHighPerf != wantHighPerf) {
+            runCatching { wifiLock?.release() }
+            wifiLock = null
+        }
+        if (wifiLock?.isHeld != true) {
+            wifiHighPerf = wantHighPerf
+            wifiLock = wifi?.createWifiLock(
+                if (wantHighPerf) WifiManager.WIFI_MODE_FULL_HIGH_PERF else WifiManager.WIFI_MODE_FULL,
+                "DroidDeck:session-wifi",
+            )?.apply {
+                setReferenceCounted(false)
+                acquire()
+            }
         }
     }
 
@@ -1787,8 +1811,10 @@ class SessionService : Service() {
                     receivedBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid()),
                 )
                 if (wasActive != downloadActive) refreshNotification()
+                // Eco-stable: radio follows traffic - HIGH_PERF only while bytes move.
+                if (wasActive != downloadActive) runCatching { updateWifiLock() }
                 updateSuspendPolicy()
-                mainHandler.postDelayed(this, DOWNLOAD_POLL_MS)
+                mainHandler.postDelayed(this, if (downloadActive) DOWNLOAD_POLL_MS else DOWNLOAD_IDLE_POLL_MS)
             }
         }
         downloadMonitorTask = poll
@@ -1856,7 +1882,9 @@ class SessionService : Service() {
         private const val STEAM_PICKUP_MS = 1500L
         private const val STEAM_EXIT_MS = 10_000L
         private const val GAME_LAUNCH_RETRY_MS = 250L
-        private const val DOWNLOAD_POLL_MS = 2_000L
+        private const val DOWNLOAD_POLL_MS = 4_000L
+        /** Idle backoff: manifests barely change with nothing in flight. */
+        private const val DOWNLOAD_IDLE_POLL_MS = 12_000L
         private const val STEAM_GAME_REQUEST = "steam-game"
         private const val NO_PAD_SWITCH = "Download/droiddeck-no-pad"
         private const val NO_UINPUT_SWITCH = "Download/droiddeck-no-uinput"

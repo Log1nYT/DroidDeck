@@ -87,7 +87,7 @@ class CpuStatComponent(val file: File) : SessionPart() {
 
     companion object {
         private const val TAG = "SessionService"
-        private const val PERIOD_MS = 500L
+        private const val PERIOD_MS = 1000L
         /** /proc/stat counts in USER_HZ, 100 a second on every Linux the guest runs. */
         private const val MS_PER_TICK = 10L
         private const val US_PER_TICK = 10_000L

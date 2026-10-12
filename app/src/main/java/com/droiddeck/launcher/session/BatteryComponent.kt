@@ -162,7 +162,7 @@ class BatteryComponent(val dir: File, private val vpowerDir: File) : SessionPart
 
     companion object {
         private const val TAG = "SessionService"
-        private const val PERIOD_MS = 5_000L
+        private const val PERIOD_MS = 10_000L
         private val VPOWER_FILES = listOf(
             "ac_status", "battery_percent", "battery_status",
             "secs_until_battery_full", "secs_until_shutdown_request",

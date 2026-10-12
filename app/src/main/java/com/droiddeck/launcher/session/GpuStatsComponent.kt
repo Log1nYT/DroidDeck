@@ -126,7 +126,7 @@ class GpuStatsComponent(val dir: File) : SessionPart() {
         /** Must match LinuxRuntime.bindAdrenoStats. */
         const val MSM_LOAD = "/sys/kernel/debug/dri/0/perf_now"
         const val MSM_CLOCK = "/sys/devices/platform/soc@0/3d00000.gpu/devfreq/3d00000.gpu/cur_freq"
-        private const val PERIOD_MS = 500L
+        private const val PERIOD_MS = 1000L
         private val MANGOHUD_FILES = listOf("gpu_busy_percentage", "clock_mhz", "temp")
         /** Qualcomm's own GPU summary, beside KGSL in vendor kernels, under the plain sysfs label. */
         private const val QCOM_GPU = "/sys/kernel/gpu"

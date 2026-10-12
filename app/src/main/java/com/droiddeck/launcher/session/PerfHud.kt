@@ -64,7 +64,7 @@ class PerfHud(context: Context) {
             val dt = (now - lastTick).coerceAtLeast(1L) / 1000f
             lastTick = now
             text = line(frames.getAndSet(0) / dt)
-            handler.postDelayed(this, 1000)
+            handler.postDelayed(this, 2000)
         }
     }
 
