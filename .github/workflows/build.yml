@@ -501,17 +501,33 @@ jobs:
       - name: Unit tests
         run: ./gradlew testReleaseUnitTest --console=plain -PndkVersion="$NDK_VERSION"
 
-      - name: Sign with the testkey (v1 + v2 + v3)
+      - name: Sign the APK (v1 + v2 + v3)
+        env:
+          ECO_RELEASE_KEYSTORE_BASE64: ${{ secrets.ECO_RELEASE_KEYSTORE_BASE64 }}
+          ECO_KEY_ALIAS: ${{ secrets.ECO_KEY_ALIAS }}
+          ECO_STORE_PASSWORD: ${{ secrets.ECO_STORE_PASSWORD }}
+          ECO_KEY_PASSWORD: ${{ secrets.ECO_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           APK=$(find app/build/outputs/apk -name '*.apk' | head -1)
           TOOLS=$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -type d | sort -V | tail -1)
           "$TOOLS/zipalign" -p -f 4 "$APK" "$APK.aligned"
-          "$TOOLS/apksigner" sign \
-            --ks keystore/testkey.p12 --ks-type PKCS12 --ks-pass pass:android \
-            --ks-key-alias testkey --key-pass pass:android \
-            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
-            --out "$APK" "$APK.aligned"
+          # ECO-STABLE fork: the release key from secrets when present, else the AOSP testkey.
+          if [ -n "${ECO_RELEASE_KEYSTORE_BASE64:-}" ]; then
+            echo "$ECO_RELEASE_KEYSTORE_BASE64" | base64 -d > /tmp/eco-release.p12
+            "$TOOLS/apksigner" sign \
+              --ks /tmp/eco-release.p12 --ks-type PKCS12 --ks-pass "pass:$ECO_STORE_PASSWORD" \
+              --ks-key-alias "$ECO_KEY_ALIAS" --key-pass "pass:$ECO_KEY_PASSWORD" \
+              --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+              --out "$APK" "$APK.aligned"
+            rm -f /tmp/eco-release.p12
+          else
+            "$TOOLS/apksigner" sign \
+              --ks keystore/testkey.p12 --ks-type PKCS12 --ks-pass pass:android \
+              --ks-key-alias testkey --key-pass pass:android \
+              --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+              --out "$APK" "$APK.aligned"
+          fi
           rm -f "$APK.aligned" "$APK.idsig"
 
       - name: Check the signature
@@ -526,8 +542,13 @@ jobs:
                         "v3 scheme (APK Signature Scheme v3): true"; do
             grep -qF "$scheme" /tmp/sig.txt || { echo "::error::apk is not signed with $scheme"; exit 1; }
           done
-          grep -qi "CN=Android, OU=Android, O=Android" /tmp/sig.txt \
-            || { echo "::error::apk is not signed with the AOSP testkey"; exit 1; }
+          # ECO-STABLE fork: the release key or the AOSP testkey, nothing else.
+          if grep -qi "CN=Android, OU=Android, O=Android" /tmp/sig.txt; then
+            echo "signed with the AOSP testkey"
+          else
+            grep -q "bf246c223c3a79b347be0c9c6eb50f3b4084acdf7d80f4547915b54dedb7ed96" /tmp/sig.txt \
+              || { echo "::error::apk is not signed with a known key"; exit 1; }
+          fi
 
       - name: Report on the pull request
         if: always() && github.event_name == 'pull_request'
