@@ -98,6 +98,7 @@ import com.droiddeck.launcher.ui.SessionDrawerPage
 import com.droiddeck.launcher.ui.sessionDrawerPages
 import com.droiddeck.launcher.ui.step
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * The session's screen: our Wayland compositor presenting onto this activity's Surface, and the
@@ -191,6 +192,10 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var volumeLevel by mutableIntStateOf(0)
     private var volumeMax by mutableIntStateOf(1)
     private val volumeHide = Runnable { volumeShown = false }
+    // Eco-stable power page state.
+    private var powerProfile by mutableStateOf(com.droiddeck.launcher.session.PowerProfile.BALANCED)
+    private var brightnessPct by mutableIntStateOf(100)
+    private var inAppVolumeKeys by mutableStateOf(true)
     /** When the pad or the on-screen controls were last used (uptimeMillis); see [showCursor]. */
     private var lastPadInputMs = 0L
     // The program's own pointer, from wl_pointer.set_cursor (see syncClientCursor): its image in
@@ -579,6 +584,11 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
                     androidApps = androidApps,
                     hudOn = hudOn,
                     upscaler = upscaler, upscaleSharpness = upscaleSharpness,
+                    powerProfile = powerProfile, onPowerProfile = { applyPowerProfile(it) },
+                    brightness = brightnessPct, onBrightness = { applyBrightness(it) },
+                    volume = volumeLevel, volumeMax = volumeMax, onVolume = { applyVolume(it) },
+                    inAppVolume = inAppVolumeKeys,
+                    onInAppVolume = { on -> SessionPrefs.setInAppVolume(this@SessionActivity, on); inAppVolumeKeys = on },
                     effects = effects,
                     textureAnisotropy = if (drawerGameProfileId == null) textureAnisotropy else drawerTextureAnisotropy,
                     textureLodBias = if (drawerGameProfileId == null) textureLodBias else drawerTextureLodBias,
@@ -1064,6 +1074,52 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
         oscMode = SessionPrefs.oscMode(this)
         backActionsInverted = SessionPrefs.backActionsInverted(this)
         padType = SessionPrefs.steamController(this)
+        // Eco-stable power page: profile, per-session brightness, volume snapshot.
+        powerProfile = com.droiddeck.launcher.session.PowerProfile.get(this)
+        inAppVolumeKeys = SessionPrefs.inAppVolume(this)
+        val savedBrightness = SessionPrefs.screenBrightness(this)
+        brightnessPct = if (savedBrightness >= 0f) (savedBrightness * 100).roundToInt().coerceIn(5, 100)
+        else systemBrightnessPct()
+        applyBrightness(brightnessPct, save = savedBrightness < 0f)
+        try {
+            val audio = getSystemService(android.media.AudioManager::class.java)
+            if (audio != null) {
+                volumeMax = audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                volumeLevel = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).coerceIn(0, volumeMax)
+            }
+        } catch (_: Throwable) { }
+    }
+
+    /** The system's brightness % for the slider's first position; read-only, never written back. */
+    private fun systemBrightnessPct(): Int = try {
+        val v = android.provider.Settings.System.getInt(contentResolver,
+            android.provider.Settings.System.SCREEN_BRIGHTNESS, 128).coerceIn(1, 255)
+        (v * 100 / 255).coerceIn(5, 100)
+    } catch (_: Throwable) { 100 }
+
+    /** Eco-stable: per-window brightness, live and without any permission. */
+    private fun applyBrightness(pct: Int, save: Boolean = true) {
+        brightnessPct = pct.coerceIn(5, 100)
+        if (save) SessionPrefs.setScreenBrightness(this, brightnessPct / 100f)
+        try {
+            window.attributes = window.attributes.apply { screenBrightness = brightnessPct / 100f }
+        } catch (_: Throwable) { }
+    }
+
+    /** Eco-stable: drawer volume slider, same silent path as the hardware keys. */
+    private fun applyVolume(level: Int) {
+        try {
+            val audio = getSystemService(android.media.AudioManager::class.java) ?: return
+            audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, level.coerceIn(0, volumeMax), 0)
+            volumeLevel = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).coerceIn(0, volumeMax)
+        } catch (_: Throwable) { }
+    }
+
+    /** Eco-stable: budget profile switch; the GPU clock follows now, the fps cap next session. */
+    private fun applyPowerProfile(id: String) {
+        powerProfile = id
+        com.droiddeck.launcher.session.PowerProfile.set(this, id)
+        Log.i(TAG, com.droiddeck.launcher.session.GpuClockPin.applyProfile(this))
     }
 
     // ── Compositor ──────────────────────────────────────────────────────────────────────────

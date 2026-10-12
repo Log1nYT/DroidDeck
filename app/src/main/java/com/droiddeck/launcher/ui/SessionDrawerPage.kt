@@ -5,6 +5,7 @@ internal enum class SessionDrawerPage(val firstControl: String) {
     CONTROLLER("touch"),
     SECOND_SCREEN("second-screen:none"),
     DISPLAY("hud"),
+    POWER("power"),
     EFFECTS("look"),
     GAMES("anisotropy"),
     SESSION("suspend"),

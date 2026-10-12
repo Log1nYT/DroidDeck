@@ -1053,4 +1053,16 @@ object SessionPrefs {
     fun setInAppVolume(context: Context, on: Boolean) {
         prefs(context).edit().putBoolean("inAppVolume", on).apply()
     }
+
+    /**
+     * Eco-stable power page: per-session screen brightness as 0..1. -1 = follow the system
+     * (read once for the slider, never written back). Applied to the session window only,
+     * so no permission is needed and nothing outside the session changes.
+     */
+    fun screenBrightness(context: Context): Float =
+        prefs(context).getFloat("screenBrightness", -1f).takeIf { it in 0f..1f } ?: -1f
+
+    fun setScreenBrightness(context: Context, value: Float) {
+        prefs(context).edit().putFloat("screenBrightness", value.coerceIn(0f, 1f)).apply()
+    }
 }

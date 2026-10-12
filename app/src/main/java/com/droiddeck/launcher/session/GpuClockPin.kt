@@ -52,6 +52,22 @@ object GpuClockPin {
         if (pinned) clear(context)
     }
 
+    /**
+     * Eco-stable power page, applied live without restarting the session: unpin unless the
+     * profile allows it, pin when it does and the user opted in. The fps side of a profile
+     * still applies next session (gamescope's rate is fixed at start).
+     */
+    @Synchronized
+    fun applyProfile(context: Context): String {
+        if (!PowerProfile.allowGpuPin(PowerProfile.get(context))) {
+            return if (pinned) {
+                clear(context)
+                "gpu clock: unpinned (profile)"
+            } else "gpu clock: governed (profile)"
+        }
+        return if (pinned) "gpu clock: pinned" else start(context)
+    }
+
     /** At a session's start: pins the clock when the user asked for it. The line is for the log. */
     @Synchronized
     fun start(context: Context): String {

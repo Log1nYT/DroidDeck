@@ -71,4 +71,18 @@ class PowerProfileTest {
         PowerProfile.set(context, "bogus")
         assertEquals(PowerProfile.BALANCED, PowerProfile.get(context))
     }
+
+    @Test
+    fun screenBrightnessDefaultsToSystem() {
+        context.getSharedPreferences("session", Context.MODE_PRIVATE).edit().clear().apply()
+        assertEquals(-1f, SessionPrefs.screenBrightness(context))
+    }
+
+    @Test
+    fun screenBrightnessRoundTripAndClamp() {
+        SessionPrefs.setScreenBrightness(context, 0.42f)
+        assertEquals(0.42f, SessionPrefs.screenBrightness(context))
+        SessionPrefs.setScreenBrightness(context, 5f)
+        assertEquals(1f, SessionPrefs.screenBrightness(context))
+    }
 }

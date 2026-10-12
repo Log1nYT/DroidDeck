@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.outlined.AutoFixHigh
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.MoreHoriz
@@ -91,6 +92,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import com.droiddeck.launcher.core.GameEnvironment
 import com.droiddeck.launcher.session.ProfileValue
+import com.droiddeck.launcher.session.PowerProfile
 import com.droiddeck.launcher.session.SelectedGameProfile
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.draw.rotate
@@ -148,6 +150,7 @@ private val SessionDrawerPage.title: Int get() = when (this) {
     SessionDrawerPage.CONTROLLER -> R.string.drawer_page_controller
     SessionDrawerPage.SECOND_SCREEN -> R.string.drawer_second_screen
     SessionDrawerPage.DISPLAY -> R.string.drawer_page_display
+    SessionDrawerPage.POWER -> R.string.drawer_page_power
     SessionDrawerPage.EFFECTS -> R.string.drawer_page_effects
     SessionDrawerPage.GAMES -> R.string.game_settings_title
     SessionDrawerPage.SESSION -> R.string.mode_session
@@ -157,6 +160,7 @@ private val SessionDrawerPage.icon get() = when (this) {
     SessionDrawerPage.CONTROLLER -> Icons.Outlined.SportsEsports
     SessionDrawerPage.SECOND_SCREEN -> Icons.Outlined.ScreenShare
     SessionDrawerPage.DISPLAY -> Icons.Outlined.DesktopWindows
+    SessionDrawerPage.POWER -> Icons.Outlined.Bolt
     SessionDrawerPage.EFFECTS -> Icons.Outlined.AutoFixHigh
     SessionDrawerPage.GAMES -> Icons.Outlined.Layers
     SessionDrawerPage.SESSION -> Icons.Outlined.Settings
@@ -206,6 +210,16 @@ class DrawerActions(
     val fexPreset: String,
     val upscaler: Int = 0,
     val upscaleSharpness: Int = 75,
+    /** Eco-stable power page: budget profile, live brightness %, live volume. */
+    val powerProfile: String = "balanced",
+    val onPowerProfile: (String) -> Unit = {},
+    val brightness: Int = 100,
+    val onBrightness: (Int) -> Unit = {},
+    val volume: Int = 0,
+    val volumeMax: Int = 1,
+    val onVolume: (Int) -> Unit = {},
+    val inAppVolume: Boolean = true,
+    val onInAppVolume: (Boolean) -> Unit = {},
     /** The compositor's post chain (gpu/ScreenEffects), changed live. */
     val effects: ScreenEffects = ScreenEffects.OFF,
     /** Texture filtering for DirectX 9-11 games (core/TextureFiltering); lands on their next launch. */
@@ -444,6 +458,26 @@ internal fun SessionDrawer(open: Boolean, requestedPage: SessionDrawerPage, cont
                                 if (SessionPrefs.upscalerHasSharpness(a.upscaler)) SliderRow(
                                     stringResource(R.string.display_sharpness), null, a.upscaleSharpness, 0..100, step = 5,
                                     format = { "$it%" }, modifier = focus.track(page, "upscale-sharpness"), onChange = a.onUpscaleSharpness)
+                            }
+                        }
+                        SessionDrawerPage.POWER -> {
+                            SettingsGroup(stringResource(R.string.power_budget)) {
+                                ChoiceRow(host, "power", stringResource(R.string.power_profile),
+                                    stringResource(R.string.power_fps_note),
+                                    listOf(PowerProfile.ECO to stringResource(R.string.power_eco),
+                                        PowerProfile.BALANCED to stringResource(R.string.power_balanced),
+                                        PowerProfile.PERFORMANCE to stringResource(R.string.power_performance)),
+                                    a.powerProfile,
+                                    chipModifier = focus.track(page, "power"), onPick = a.onPowerProfile)
+                            }
+                            SettingsGroup(stringResource(R.string.power_screen_sound)) {
+                                SliderRow(stringResource(R.string.power_brightness), null, a.brightness, 5..100, step = 5,
+                                    format = { "$it%" }, modifier = focus.track(page, "brightness"), onChange = a.onBrightness)
+                                SliderRow(stringResource(R.string.power_volume), null, a.volume, 0..a.volumeMax.coerceAtLeast(1), step = 1,
+                                    format = { "$it/${a.volumeMax.coerceAtLeast(1)}" }, modifier = focus.track(page, "volume"), onChange = a.onVolume)
+                                ToggleRow(host, "volkeys", stringResource(R.string.power_volume_keys),
+                                    stringResource(R.string.power_volume_keys_hint), a.inAppVolume,
+                                    chipModifier = focus.track(page, "volkeys"), onChange = a.onInAppVolume)
                             }
                         }
                         SessionDrawerPage.EFFECTS -> {
