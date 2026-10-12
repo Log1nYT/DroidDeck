@@ -186,6 +186,11 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
     /** The blue the front end flooded to on the way in; the loading screen opens on it (LaunchFlood). */
     private var floodColor by mutableStateOf<Int?>(null)
     private val cursorHide = Runnable { cursorVisible = false }
+    // Eco-stable: in-app volume state (no system panel, see SessionPrefs.inAppVolume).
+    private var volumeShown by mutableStateOf(false)
+    private var volumeLevel by mutableIntStateOf(0)
+    private var volumeMax by mutableIntStateOf(1)
+    private val volumeHide = Runnable { volumeShown = false }
     /** When the pad or the on-screen controls were last used (uptimeMillis); see [showCursor]. */
     private var lastPadInputMs = 0L
     // The program's own pointer, from wl_pointer.set_cursor (see syncClientCursor): its image in
@@ -530,6 +535,7 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
                 CursorOverlay(cursorPos, cursorVisible, resources.displayMetrics.density,
                     cursorImage, cursorHotX, cursorHotY, cursorImageScale)
                 if (hud.text.isNotEmpty()) HudText(hud.text)
+                if (volumeShown) com.droiddeck.launcher.ui.VolumeIndicator(volumeLevel, volumeMax)
                 if (loading.visible) LoadingOverlay(
                     loading.step, loading.percent, loading.elapsed, loading.hint, loading.ended,
                     topic = loading.topic, readable = loading.readable,
@@ -1578,12 +1584,42 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     // ── Input ───────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Eco-stable: volume keys without the system volume panel. The panel is a separate
+     * system window over the compositor's SurfaceView and its appearance tears a frame
+     * on Adreno devices; here STREAM_MUSIC is adjusted silently (flags=0, no UI, no
+     * click sound) and the session draws its own indicator in its Compose layer.
+     */
+    private fun handleVolumeKey(event: KeyEvent): Boolean {
+        com.droiddeck.launcher.ui.VolumeKeys.direction(event.keyCode) ?: return false
+        if (event.action != KeyEvent.ACTION_DOWN) return true
+        try {
+            val audio = getSystemService(android.media.AudioManager::class.java) ?: return true
+            val dir = com.droiddeck.launcher.ui.VolumeKeys.direction(event.keyCode) ?: return true
+            val adjust = when {
+                dir > 0 -> android.media.AudioManager.ADJUST_RAISE
+                dir < 0 -> android.media.AudioManager.ADJUST_LOWER
+                else -> android.media.AudioManager.ADJUST_TOGGLE_MUTE
+            }
+            audio.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, adjust, 0)
+            volumeMax = audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            volumeLevel = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).coerceIn(0, volumeMax)
+            volumeShown = true
+            uiHandler.removeCallbacks(volumeHide)
+            uiHandler.postDelayed(volumeHide, 1200L)
+        } catch (_: Throwable) { }
+        return true
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // The device's own volume keys belong to Android: forwarded to the guest as keys they
         // changed nothing anyone could hear (a Pocket FIT report, on the desktop).
         when (event.keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE ->
-                return super.dispatchKeyEvent(event)
+                // Eco-stable: handled in-app to keep the system panel (a separate window that
+                // tears a frame over the compositor's SurfaceView) off the screen.
+                return if (SessionPrefs.inAppVolume(this)) handleVolumeKey(event)
+                else super.dispatchKeyEvent(event)
         }
         if (pipUi) return true
         val fromController = PadBridge.isControllerKeyEvent(event)

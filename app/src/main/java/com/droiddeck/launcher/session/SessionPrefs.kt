@@ -1040,4 +1040,17 @@ object SessionPrefs {
     fun setGameStorage(context: Context, path: String, label: String) {
         prefs(context).edit().putString("gameStorage", path).putString("gameStorageLabel", label).apply()
     }
+
+    /**
+     * Eco-stable fork: volume keys are handled inside the session (no system volume panel).
+     * The panel is a separate system window over the compositor's SurfaceView; on Adreno
+     * devices its appearance recomposites the screen and tears a frame (artifacts). With this
+     * on, the keys adjust STREAM_MUSIC silently and the session draws its own indicator in
+     * its Compose layer - no new window, no glitch. Off restores the upstream behaviour.
+     */
+    fun inAppVolume(context: Context): Boolean = prefs(context).getBoolean("inAppVolume", true)
+
+    fun setInAppVolume(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean("inAppVolume", on).apply()
+    }
 }
