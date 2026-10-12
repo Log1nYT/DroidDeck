@@ -3,6 +3,7 @@ package com.droiddeck.launcher.session
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import android.os.SystemClock
 import android.util.Log
 import com.droiddeck.launcher.core.SessionPart
 import java.io.File
@@ -29,6 +30,8 @@ import kotlin.math.abs
 class BatteryComponent(val dir: File, private val vpowerDir: File) : SessionPart() {
     @Volatile private var running = false
     private var thread: Thread? = null
+    /** Eco-stable: smoothed QAM forecast (see BatteryForecast); sysfs keeps raw values. */
+    private val forecast = BatteryForecast()
 
     override fun start() {
         // Older builds exported the same aggregate battery twice; MangoHud counts both supplies.
@@ -125,13 +128,24 @@ class BatteryComponent(val dir: File, private val vpowerDir: File) : SessionPart
             }
             val plugged = (sticky?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
             vpowerDir.mkdirs()
+            // Eco-stable: the QAM's clock comes from the forecast (EMA-smoothed, with a
+            // %-rate fallback where the current API is dead); instantaneous stays as fallback.
+            forecast.addSample(
+                SystemClock.elapsedRealtime(),
+                chargeNowUah.takeIf { it > 0 },
+                currentAvgUa.takeIf { it != 0L },
+                pct, charging,
+            )
+            val forecastEmptyS = forecast.minutesToEmpty(chargeNowUah.takeIf { it > 0 })?.times(60)
+            val forecastFullS = forecast.minutesToFull(
+                chargeFullUah.takeIf { it > 0 }, chargeNowUah.takeIf { it > 0 })?.times(60)
             val vpower = linkedMapOf(
                 "ac_status" to if (plugged) "Connected" else "Disconnected",
                 "battery_percent" to "%.2f".format(java.util.Locale.ROOT, pct.toDouble()),
                 "battery_status" to statusText,
                 // Steam reads a separate file for each direction; -1 = no estimate.
-                "secs_until_battery_full" to (if (timeToFullS > 0) timeToFullS else -1L).toString(),
-                "secs_until_shutdown_request" to (if (timeToEmptyS > 0) timeToEmptyS else -1L).toString(),
+                "secs_until_battery_full" to ((forecastFullS ?: timeToFullS).takeIf { it > 0 } ?: -1L).toString(),
+                "secs_until_shutdown_request" to ((forecastEmptyS ?: timeToEmptyS).takeIf { it > 0 } ?: -1L).toString(),
             )
             for ((k, v) in vpower) put(File(vpowerDir, k), v + "\n")
         } catch (t: Throwable) {
